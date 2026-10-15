@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Tone Changer</title>
+<style>
+  :root {
+    --bg: #0b0b0e;
+    --card-bg: rgba(255, 255, 255, 0.035);
+    --card-border: rgba(255, 255, 255, 0.08);
+    --text-primary: #f4f4f6;
+    --text-secondary: #8b8b93;
+    --text-tertiary: #616168;
+    --divider: rgba(255, 255, 255, 0.07);
+    --accent-1: #7c6cf0;
+    --accent-2: #5b8def;
+    --accent-glow: rgba(124, 108, 240, 0.35);
+    --track-bg: rgba(255, 255, 255, 0.09);
+    --thumb: #ffffff;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f4f4f6;
+      --card-bg: rgba(255, 255, 255, 0.7);
+      --card-border: rgba(0, 0, 0, 0.06);
+      --text-primary: #1a1a1e;
+      --text-secondary: #6e6e76;
+      --text-tertiary: #9a9aa1;
+      --divider: rgba(0, 0, 0, 0.06);
+      --track-bg: rgba(0, 0, 0, 0.08);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    width: 288px;
+    padding: 14px;
+    background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 18px;
+    padding: 18px;
+    box-shadow: 0 20px 40px -20px rgba(0, 0, 0, 0.5);
+  }
+
+  .header { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+
+  .icon-badge {
+    width: 34px; height: 34px; flex-shrink: 0; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(155deg, var(--accent-1), var(--accent-2));
+    box-shadow: 0 6px 16px -4px var(--accent-glow);
+  }
+  .icon-badge svg { width: 18px; height: 18px; stroke: #fff; }
+
+  .title-group { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .subtitle {
+    font-size: 11.5px; color: var(--text-secondary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .pitch-display { display: flex; align-items: baseline; gap: 4px; margin-bottom: 14px; }
+  #val {
+    font-size: 38px; font-weight: 650; color: var(--text-primary);
+    letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  .unit { font-size: 14px; font-weight: 550; color: var(--text-tertiary); }
+
+  .slider-wrap { margin-bottom: 8px; }
+
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 6px; border-radius: 999px;
+    background: var(--track-bg); outline: none; cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--thumb);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  }
+  input[type="range"]:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .scale {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--text-tertiary); margin-bottom: 18px;
+  }
+
+  .divider { height: 1px; background: var(--divider); margin: 0 0 14px; }
+
+  .btn-row { display: flex; gap: 8px; }
+  .btn {
+    flex: 1; padding: 6px 0;
+    border: 1px solid var(--card-border); border-radius: 8px;
+    background: var(--track-bg); color: var(--text-primary);
+    font-family: inherit; font-size: 11.5px; font-weight: 550; cursor: pointer;
+  }
+  .btn:hover { background: rgba(124, 108, 240, 0.25); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .footer-hint {
+    margin-top: 12px; padding: 0 4px;
+    font-size: 10.5px; line-height: 1.45; color: var(--text-tertiary);
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="icon-badge">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 18V5l12-2v13"></path>
+          <circle cx="6" cy="18" r="3"></circle>
+          <circle cx="18" cy="16" r="3"></circle>
+        </svg>
+      </div>
+      <div class="title-group">
+        <div class="title">Tone Changer</div>
+        <div class="subtitle" id="subtitle">Loading…</div>
+      </div>
+    </div>
+
+    <div class="pitch-display">
+      <span id="val">0</span><span class="unit">semitones</span>
+    </div>
+
+    <div class="slider-wrap">
+      <input type="range" id="slider" min="-12" max="12" step="1" value="0" />
+    </div>
+    <div class="scale"><span>-12</span><span>0</span><span>+12</span></div>
+
+    <div class="divider"></div>
+
+    <div class="btn-row">
+      <button type="button" id="downBtn" class="btn">−1</button>
+      <button type="button" id="upBtn" class="btn">+1</button>
+      <button type="button" id="resetBtn" class="btn">Reset</button>
+    </div>
+  </div>
+  <div class="footer-hint" id="footerHint">Applies to every tab on this site, and any tab opened on it afterward. Speed is unchanged.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
