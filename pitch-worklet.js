@@ -1,7 +1,8 @@
-// Phase-vocoder pitch shifter (after S. Bernsee's smbPitchShift): STFT, true
-// per-bin frequency estimation from phase advance, bin remapping by the pitch
-// ratio, phase re-accumulation, inverse STFT with overlap-add. Handles dense
-// polyphonic material (music) far better than time-domain grain shifting.
+// Phase-vocoder pitch shifter (analysis/synthesis after S. Bernsee's
+// smbPitchShift) with Laroche-Dolson identity phase locking and transient phase
+// resets: STFT, true per-bin frequency from phase advance, spectral peaks
+// moved to their shifted bins with their neighbouring bins carried along at
+// fixed phase offsets, inverse STFT with overlap-add.
 // Output latency is FFT_SIZE - FFT_SIZE / OVERLAP samples.
 const FFT_SIZE = 4096;
 const OVERLAP = 4;
@@ -9,6 +10,13 @@ const HALF = FFT_SIZE / 2;
 const STEP = FFT_SIZE / OVERLAP;
 const LATENCY = FFT_SIZE - STEP;
 const TWO_PI = 2 * Math.PI;
+// Hann applied at analysis and synthesis: overlap-added w^2 sums to OVERLAP * 3/8.
+const HANN_SQUARE_MEAN = 0.375;
+const MIN_PEAK_MAGNITUDE = 1e-6;
+// Summed positive magnitude increase relative to the previous frame's total
+// that counts as an onset; tune down for softer attacks, up if sustained
+// notes get phase-reset too often.
+const TRANSIENT_THRESHOLD = 1.0;
 
 const WINDOW = new Float64Array(FFT_SIZE);
 for (let i = 0; i < FFT_SIZE; i++) WINDOW[i] = 0.5 - 0.5 * Math.cos((TWO_PI * i) / FFT_SIZE);
@@ -67,13 +75,38 @@ class ChannelState {
     this.sumPhase = new Float64Array(HALF + 1);
     this.anaMagn = new Float64Array(HALF + 1);
     this.anaFreq = new Float64Array(HALF + 1);
-    this.synMagn = new Float64Array(HALF + 1);
-    this.synFreq = new Float64Array(HALF + 1);
+    this.anaPhase = new Float64Array(HALF + 1);
+    this.prevMagn = new Float64Array(HALF + 1);
+    this.synRe = new Float64Array(HALF + 1);
+    this.synIm = new Float64Array(HALF + 1);
+    this.peaks = new Int32Array(HALF + 1);
+    this.transientCooldown = 0;
     this.rover = LATENCY;
   }
 
+  detectTransient() {
+    const { anaMagn, prevMagn } = this;
+    let flux = 0;
+    let previousTotal = 0;
+    for (let k = 1; k <= HALF; k++) {
+      const rise = anaMagn[k] - prevMagn[k];
+      if (rise > 0) flux += rise;
+      previousTotal += prevMagn[k];
+    }
+    prevMagn.set(anaMagn);
+    if (this.transientCooldown > 0) {
+      this.transientCooldown--;
+      return false;
+    }
+    if (previousTotal > MIN_PEAK_MAGNITUDE && flux / previousTotal > TRANSIENT_THRESHOLD) {
+      this.transientCooldown = OVERLAP;
+      return true;
+    }
+    return false;
+  }
+
   processFrame(ratio, sampleRate) {
-    const { re, im, lastPhase, sumPhase, anaMagn, anaFreq, synMagn, synFreq } = this;
+    const { re, im, lastPhase, sumPhase, anaMagn, anaFreq, anaPhase, synRe, synIm, peaks } = this;
     const freqPerBin = sampleRate / FFT_SIZE;
     const expected = (TWO_PI * STEP) / FFT_SIZE;
 
@@ -86,6 +119,7 @@ class ChannelState {
     for (let k = 0; k <= HALF; k++) {
       anaMagn[k] = 2 * Math.hypot(re[k], im[k]);
       const phase = Math.atan2(im[k], re[k]);
+      anaPhase[k] = phase;
       let delta = phase - lastPhase[k] - k * expected;
       lastPhase[k] = phase;
       let qpd = Math.round(delta / Math.PI);
@@ -94,21 +128,44 @@ class ChannelState {
       anaFreq[k] = k * freqPerBin + ((OVERLAP * delta) / TWO_PI) * freqPerBin;
     }
 
-    synMagn.fill(0);
-    synFreq.fill(0);
-    for (let k = 0; k <= HALF; k++) {
-      const index = Math.floor(k * ratio);
-      if (index <= HALF) {
-        synMagn[index] += anaMagn[k];
-        synFreq[index] = anaFreq[k] * ratio;
+    const transient = this.detectTransient();
+
+    let peakCount = 0;
+    for (let k = 2; k < HALF - 1; k++) {
+      const m = anaMagn[k];
+      if (
+        m > MIN_PEAK_MAGNITUDE &&
+        m > anaMagn[k - 1] && m > anaMagn[k - 2] &&
+        m >= anaMagn[k + 1] && m >= anaMagn[k + 2]
+      ) {
+        peaks[peakCount++] = k;
+      }
+    }
+
+    synRe.fill(0);
+    synIm.fill(0);
+    for (let i = 0; i < peakCount; i++) {
+      const p = peaks[i];
+      const regionStart = i === 0 ? 0 : ((peaks[i - 1] + p) >> 1) + 1;
+      const regionEnd = i === peakCount - 1 ? HALF : (p + peaks[i + 1]) >> 1;
+      const shiftedBin = (anaFreq[p] * ratio) / freqPerBin;
+      const target = Math.round(shiftedBin);
+      if (target < 0 || target > HALF) continue;
+
+      const peakPhase = transient ? anaPhase[p] : sumPhase[target] + shiftedBin * expected;
+      for (let k = regionStart; k <= regionEnd; k++) {
+        const t = target + k - p;
+        if (t < 0 || t > HALF) continue;
+        const phase = peakPhase + anaPhase[k] - anaPhase[p];
+        synRe[t] += anaMagn[k] * Math.cos(phase);
+        synIm[t] += anaMagn[k] * Math.sin(phase);
       }
     }
 
     for (let k = 0; k <= HALF; k++) {
-      const deviation = (synFreq[k] - k * freqPerBin) / freqPerBin;
-      sumPhase[k] += (TWO_PI * deviation) / OVERLAP + k * expected;
-      re[k] = synMagn[k] * Math.cos(sumPhase[k]);
-      im[k] = synMagn[k] * Math.sin(sumPhase[k]);
+      re[k] = synRe[k];
+      im[k] = synIm[k];
+      if (synRe[k] !== 0 || synIm[k] !== 0) sumPhase[k] = Math.atan2(synIm[k], synRe[k]);
     }
     for (let k = HALF + 1; k < FFT_SIZE; k++) {
       re[k] = 0;
@@ -116,7 +173,7 @@ class ChannelState {
     }
     fft(re, im, 1);
 
-    const scale = 2 / (HALF * OVERLAP);
+    const scale = 2 / (HALF * OVERLAP * OVERLAP * HANN_SQUARE_MEAN);
     for (let k = 0; k < FFT_SIZE; k++) this.outAccum[k] += WINDOW[k] * re[k] * scale;
     for (let k = 0; k < STEP; k++) this.outFifo[k] = this.outAccum[k];
     this.outAccum.copyWithin(0, STEP, STEP + FFT_SIZE);
